@@ -94,11 +94,11 @@ func handleConnection(conn net.Conn) {
 		return
 	}
 
-	fmt.Printf("-\n%s-\n", dat)
+	fmt.Printf("  - PATCH DATA -  \n%s\n", dat)
 
 	dump, _ := httputil.DumpRequest(req, false)
 
-	fmt.Printf("\n-\n%s-\n", dump)
+	fmt.Printf("  - DUMP REQ WITHOUT BODY - \n%s\n", dump)
 
 	var resp []byte
 
@@ -151,7 +151,7 @@ func handleConnection(conn net.Conn) {
 
 		var buf []byte
 
-		fmt.Println("  - INIT -  ")
+		fmt.Println("  - INIT PROXY -  ")
 		for {
 			sock.SetDeadline(time.Now().Add(5 * time.Second))
 			n, err := sock.Read(chunk)
@@ -175,7 +175,7 @@ func handleConnection(conn net.Conn) {
 
 		}
 
-		fmt.Println("  - END -  ")
+		fmt.Println("  - END PROXY -  ")
 
 		sock.Close()
 		conn.Close()
@@ -257,6 +257,8 @@ func readRequest(b *bufio.Reader) (req *http.Request, data []byte, err error) {
 	data = append(data, []byte(s)...)
 	data = append(data, []byte("\r\n")...)
 
+	fmt.Println()
+	fmt.Println("HEADER")
 	// Read headers
 	var l int
 	for {
@@ -270,10 +272,11 @@ func readRequest(b *bufio.Reader) (req *http.Request, data []byte, err error) {
 
 		if len(mime) > 1 {
 
+			fmt.Printf(" - ORIGINAL %s\n", s)
 			if mime[0] == "Upgrade-Insecure-Requests" { continue }
 
 			if mime[0] == "Accept-Encoding" && *encode != "" {
-				fmt.Println("NO SUPPORT ENCODE", s)
+
 				s = fmt.Sprintf("%s: %s", mime[0], *encode)
 			}
 
@@ -304,6 +307,7 @@ func readRequest(b *bufio.Reader) (req *http.Request, data []byte, err error) {
 
 		} else { break }
 	}
+	fmt.Println()
 
 	// Read body
 	buf := make([]byte, l)
