@@ -1,6 +1,7 @@
 package main
 
 import (
+	"io"
 	"os"
 	"fmt"
 	"flag"
@@ -11,15 +12,17 @@ import (
 	"bufio"
 	"strings"
 	"crypto/tls"
-	"io/ioutil"
+//	"io/ioutil"
 	"net/http"
 	"net/textproto"
 	"net/http/httputil"
 )
 
 var (
-	listen  = flag.String ("listen", ":8000", "")
-	withTLS = flag.Bool   ("tls",      false, "")
+	domain   = flag.String ("domain", "example.com:443", "")
+	listen   = flag.String ("listen", ":8000",           "")
+	withTLS  = flag.Bool   ("tls",      false,           "")
+	insecure = flag.Bool   ("k",        false,           "")
 )
 
 func checkError(err error) {
@@ -52,7 +55,7 @@ func main() {
 		checkError(err)
 
 		conf := &tls.Config{
-				InsecureSkipVerify: true,
+//				InsecureSkipVerify: *insecure,
 				Certificates: []tls.Certificate{cert},
 		}
 
@@ -90,7 +93,7 @@ func handleConnection(conn net.Conn) {
 
 	fmt.Printf("\n-\n%s-\n", dump)
 
-
+	/*
 	response := http.Response{
 				StatusCode:    200,
 				ProtoMajor:    req.ProtoMajor,
@@ -106,11 +109,37 @@ func handleConnection(conn net.Conn) {
 
 	resp := braw.Bytes()
 
+	fmt.Println("  ---  ")
 	fmt.Println(string(resp))
+	*/
 
 	// proxy here .
-	conn.Write(resp)
+	conf := &tls.Config{
+			InsecureSkipVerify: *insecure,
+	}
 
+	sock, err := tls.Dial("tcp", *domain, conf)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	sock.Write(dat[:])
+
+	chunk := make([]byte, 100)
+
+	fmt.Println("  ---  ")
+	for {
+		n, err := sock.Read(chunk)
+		fmt.Printf("%s", chunk[:n])
+		conn.Write(chunk[:n])
+
+		if err == io.EOF { break }
+	}
+	fmt.Println("  ---  ")
+
+
+	sock.Close()
 }
 
 func readRequest(b *bufio.Reader) (req *http.Request, data []byte, err error) {
@@ -137,10 +166,21 @@ func readRequest(b *bufio.Reader) (req *http.Request, data []byte, err error) {
 			return nil, nil, err
 		}
 
+
+		mime := strings.Split(s,       ":")
+		addr := strings.Split(*domain, ":")
+
+		if len(mime) > 1 {
+
+			if mime[0] == "Upgrade-Insecure-Requests" { continue }
+
+			if mime[0] == "Host" {
+				s = fmt.Sprintf("%s: %s", mime[0], addr[0])
+			}
+		}
+
 		data = append(data, []byte(s)...)
 		data = append(data, '\n')
-
-		mime := strings.Split(s, ":")
 
 		if len(mime) > 1 {
 
@@ -157,6 +197,7 @@ func readRequest(b *bufio.Reader) (req *http.Request, data []byte, err error) {
 						fmt.Sprintf("malformed HTTP %s %s", s))
 				}
 			}
+
 
 		} else {
 			s = mime[0]
