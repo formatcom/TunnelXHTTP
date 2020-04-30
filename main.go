@@ -28,7 +28,7 @@ const (
 var (
 	domain   = flag.String ("domain", "example.com:443", "")
 	listen   = flag.String ("listen", ":8000",           "")
-	encode   = flag.String ("encode",  "gzip",           "only support [gzip|none]")
+	encode   = flag.String ("encode",  "gzip",           "only support [gzip|none|\"\"]")
 	mode     = flag.Int    ("mode",         0,           "0 [conn timeout] | 1 [http 500] | 2 [proxy]")
 	withTLS  = flag.Bool   ("tls",      false,           "With TLS")
 	insecure = flag.Bool   ("k",        false,           "TLS Insecure Skip Verify")
@@ -272,7 +272,7 @@ func readRequest(b *bufio.Reader) (req *http.Request, data []byte, err error) {
 
 			if mime[0] == "Upgrade-Insecure-Requests" { continue }
 
-			if mime[0] == "Accept-Encoding" {
+			if mime[0] == "Accept-Encoding" && *encode != "" {
 				fmt.Println("NO SUPPORT ENCODE", s)
 				s = fmt.Sprintf("%s: %s", mime[0], *encode)
 			}
