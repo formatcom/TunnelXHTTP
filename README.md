@@ -8,6 +8,8 @@ $ ./TunnelXHTTP -help
 Usage of ./TunnelXHTTP:
   -domain string
     	 (default "example.com:443")
+  -encode string
+    	only support [gzip|none] (default "gzip")
   -k	TLS Insecure Skip Verify
   -listen string
     	 (default ":8000")

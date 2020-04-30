@@ -28,6 +28,7 @@ const (
 var (
 	domain   = flag.String ("domain", "example.com:443", "")
 	listen   = flag.String ("listen", ":8000",           "")
+	encode   = flag.String ("encode",  "gzip",           "only support [gzip|none]")
 	mode     = flag.Int    ("mode",         0,           "0 [conn timeout] | 1 [http 500] | 2 [proxy]")
 	withTLS  = flag.Bool   ("tls",      false,           "With TLS")
 	insecure = flag.Bool   ("k",        false,           "TLS Insecure Skip Verify")
@@ -88,6 +89,7 @@ func main() {
 func handleConnection(conn net.Conn) {
 	req, dat, err := readRequest(bufio.NewReader(conn))
 	if err != nil {
+		conn.Close()
 		fmt.Println(err)
 		return
 	}
@@ -162,6 +164,17 @@ func handleConnection(conn net.Conn) {
 
 		fmt.Printf("%s\n", buf)
 
+		enc, _ := getEncondeType(buf)
+
+		fmt.Printf("  - DECODE DATA %s -  \n", enc)
+
+		if enc == "gzip" {
+
+			data, _ := gUnzipData(buf)
+			fmt.Println(string(data))
+
+		}
+
 		fmt.Println("  - END -  ")
 
 		sock.Close()
@@ -174,6 +187,24 @@ func handleConnection(conn net.Conn) {
 
 }
 
+func getEncondeType(data []byte) (encode string, err error) {
+
+	tp  := textproto.NewReader(bufio.NewReader(bytes.NewReader(data)))
+
+	// remove first line
+	if _, err = tp.ReadLine(); err != nil {
+		return "", err
+	}
+
+	mimeHeader, err := tp.ReadMIMEHeader()
+	if err != nil {
+		return "", err
+	}
+
+	return mimeHeader.Get("Content-Encoding"), nil
+
+}
+
 func gUnzipData(data []byte) (resData []byte, err error) {
 
 
@@ -181,12 +212,16 @@ func gUnzipData(data []byte) (resData []byte, err error) {
 	buf := string(data)
 
 
-	r := strings.Split(buf, "\r\n\r\n")
+	r := strings.SplitN(buf, "\r\n\r\n", 3)
+
+	// remove len
+	if len(r) > 1 {
+		r = strings.SplitN(r[1], "\r\n", 3)
+	}
 
 	// no report error, FIX THIS .
 	if len(r) > 1 {
 
-		fmt.Println(r[1])
 		b := bytes.NewBuffer([]byte(r[1]))
 
 		reader, err := gzip.NewReader(b)
@@ -239,7 +274,7 @@ func readRequest(b *bufio.Reader) (req *http.Request, data []byte, err error) {
 
 			if mime[0] == "Accept-Encoding" {
 				fmt.Println("NO SUPPORT ENCODE", s)
-				s = fmt.Sprintf("%s: %s", mime[0], "none")
+				s = fmt.Sprintf("%s: %s", mime[0], *encode)
 			}
 
 			if mime[0] == "Host" {
