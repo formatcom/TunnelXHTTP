@@ -1,12 +1,12 @@
 package main
 
 import (
-	"io"
 	"os"
 	"fmt"
 	"flag"
 	"bytes"
 	"net"
+	"time"
 	"strconv"
 	"errors"
 	"bufio"
@@ -16,13 +16,21 @@ import (
 	"net/http"
 	"net/textproto"
 	"net/http/httputil"
+	"compress/gzip"
+)
+
+const (
+	MODE_CONN_TIMEOUT = 0
+	MODE_HTTP_500     = 1
+	MODE_HTTP_PROXY   = 2
 )
 
 var (
 	domain   = flag.String ("domain", "example.com:443", "")
 	listen   = flag.String ("listen", ":8000",           "")
-	withTLS  = flag.Bool   ("tls",      false,           "")
-	insecure = flag.Bool   ("k",        false,           "")
+	mode     = flag.Int    ("mode",         0,           "0 [conn timeout] | 1 [http 500] | 2 [proxy]")
+	withTLS  = flag.Bool   ("tls",      false,           "With TLS")
+	insecure = flag.Bool   ("k",        false,           "TLS Insecure Skip Verify")
 )
 
 func checkError(err error) {
@@ -55,7 +63,6 @@ func main() {
 		checkError(err)
 
 		conf := &tls.Config{
-//				InsecureSkipVerify: *insecure,
 				Certificates: []tls.Certificate{cert},
 		}
 
@@ -79,8 +86,6 @@ func main() {
 }
 
 func handleConnection(conn net.Conn) {
-	defer conn.Close()
-
 	req, dat, err := readRequest(bufio.NewReader(conn))
 	if err != nil {
 		fmt.Println(err)
@@ -93,53 +98,111 @@ func handleConnection(conn net.Conn) {
 
 	fmt.Printf("\n-\n%s-\n", dump)
 
-	/*
-	response := http.Response{
-				StatusCode:    200,
-				ProtoMajor:    req.ProtoMajor,
-				ProtoMinor:    req.ProtoMinor,
-				Request:       req,
-				Header:        http.Header{},
-				Body:          ioutil.NopCloser(bytes.NewReader(dat[:])),
-				ContentLength: -1,
+	var resp []byte
+
+	switch m := *mode; m {
+	case MODE_HTTP_500:
+		response := http.Response{
+					StatusCode:    500,
+					ProtoMajor:    req.ProtoMajor,
+					ProtoMinor:    req.ProtoMinor,
+					Request:       req,
+					Header:        http.Header{},
+//					Body:          ioutil.NopCloser(bytes.NewReader(dat[:])),
+					ContentLength: -1,
+		}
+
+		var braw bytes.Buffer
+		response.Write(&braw)
+
+		resp = braw.Bytes()
+
+		fmt.Println("  ---  ")
+		fmt.Println(string(resp))
+
+		conn.Write(resp[:])
+		conn.Close()
+
+
+	case MODE_HTTP_PROXY:
+		conf := &tls.Config{
+				InsecureSkipVerify: *insecure,
+		}
+
+		var sock net.Conn
+		var err  error
+
+		if *withTLS {
+			sock, err = tls.Dial("tcp", *domain, conf)
+		} else {
+			sock, err = net.Dial("tcp", *domain)
+		}
+
+		if err != nil {
+			fmt.Println(err)
+			return
+		}
+
+		sock.Write(dat[:])
+
+		chunk := make([]byte, 100)
+
+		var buf []byte
+
+		fmt.Println("  - INIT -  ")
+		for {
+			sock.SetDeadline(time.Now().Add(5 * time.Second))
+			n, err := sock.Read(chunk)
+
+			conn.Write(chunk[:n])
+			buf = append(buf, chunk[:n]...)
+
+			if err != nil { break }
+		}
+
+		fmt.Printf("%s\n", buf)
+
+		fmt.Println("  - END -  ")
+
+		sock.Close()
+		conn.Close()
+
+
+	default:
+		// nothing
 	}
 
-	var braw bytes.Buffer
-	response.Write(&braw)
+}
 
-	resp := braw.Bytes()
+func gUnzipData(data []byte) (resData []byte, err error) {
 
-	fmt.Println("  ---  ")
-	fmt.Println(string(resp))
-	*/
 
-	// proxy here .
-	conf := &tls.Config{
-			InsecureSkipVerify: *insecure,
+	var _data bytes.Buffer
+	buf := string(data)
+
+
+	r := strings.Split(buf, "\r\n\r\n")
+
+	// no report error, FIX THIS .
+	if len(r) > 1 {
+
+		fmt.Println(r[1])
+		b := bytes.NewBuffer([]byte(r[1]))
+
+		reader, err := gzip.NewReader(b)
+		if err != nil {
+			return nil, err
+		}
+
+
+		if _, err := _data.ReadFrom(reader); err != nil {
+			return nil, err
+		}
+
 	}
 
-	sock, err := tls.Dial("tcp", *domain, conf)
-	if err != nil {
-		fmt.Println(err)
-		return
-	}
 
-	sock.Write(dat[:])
-
-	chunk := make([]byte, 100)
-
-	fmt.Println("  ---  ")
-	for {
-		n, err := sock.Read(chunk)
-		fmt.Printf("%s", chunk[:n])
-		conn.Write(chunk[:n])
-
-		if err == io.EOF { break }
-	}
-	fmt.Println("  ---  ")
-
-
-	sock.Close()
+	return _data.Bytes(), nil
 }
 
 func readRequest(b *bufio.Reader) (req *http.Request, data []byte, err error) {
@@ -157,7 +220,7 @@ func readRequest(b *bufio.Reader) (req *http.Request, data []byte, err error) {
 	}
 
 	data = append(data, []byte(s)...)
-	data = append(data, '\n')
+	data = append(data, []byte("\r\n")...)
 
 	// Read headers
 	var l int
@@ -174,13 +237,18 @@ func readRequest(b *bufio.Reader) (req *http.Request, data []byte, err error) {
 
 			if mime[0] == "Upgrade-Insecure-Requests" { continue }
 
+			if mime[0] == "Accept-Encoding" {
+				fmt.Println("NO SUPPORT ENCODE", s)
+				s = fmt.Sprintf("%s: %s", mime[0], "none")
+			}
+
 			if mime[0] == "Host" {
 				s = fmt.Sprintf("%s: %s", mime[0], addr[0])
 			}
 		}
 
 		data = append(data, []byte(s)...)
-		data = append(data, '\n')
+		data = append(data, []byte("\r\n")...)
 
 		if len(mime) > 1 {
 
@@ -199,10 +267,7 @@ func readRequest(b *bufio.Reader) (req *http.Request, data []byte, err error) {
 			}
 
 
-		} else {
-			s = mime[0]
-			break
-		}
+		} else { break }
 	}
 
 	// Read body
